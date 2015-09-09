@@ -2,6 +2,7 @@
 
 #
 # generate_nametags_with_barcodes.py
+# 	Copyright (C) 2015 Sandeep M
 # 
 # every year an elementary school in california runs a festival where families 
 # sign up for parties and events, as well as bid for auctions and donations.
@@ -22,14 +23,14 @@
 #
 #       openpyxl, a Python library to read/write Excel 2010 xlsx/xlsm/xltx/xltm files.
 #
-# generate_nametags_with_barcodes.py is free software: you can redistribute it and/or 
-# modify it under the terms of the GNU General Public License as published by 
-# the Free Software Foundation, either version 3 of the License, or (at your 
-# option) any later version.
+# generate_nametags_with_barcodes.py is free software: 
+# you can redistribute it and/or modify it under the terms of the 
+# GNU General Public License as published by the Free Software Foundation, 
+# either version 3 of the License, or (at your option) any later version.
 #
-# generate_nametags_with_barcodes.py is distributed in the hope that it will be useful, 
-# but WITHOUT ANY # WARRANTY; without even the implied warranty of MERCHANTABILITY 
-# or FITNESS FOR # A PARTICULAR PURPOSE.  
+# generate_nametags_with_barcodes.py is distributed in the hope that it 
+# will be useful, but WITHOUT ANY # WARRANTY; without even the implied 
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
 #
 
 # ok, here we go:
@@ -40,7 +41,7 @@ from reportlab.graphics.barcode import eanbc, qr, usps
 from reportlab.graphics.shapes import Drawing 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import mm
+from reportlab.lib.units import mm, inch
 from reportlab.pdfbase.pdfmetrics import registerFont, stringWidth
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -53,11 +54,14 @@ random.seed(187459)
 
 # for excel reading
 from openpyxl import load_workbook
-import pprint
+from pprint import pprint
+
+# for utils
+from collections import OrderedDict
  
 #----------------------------------------------------------------------
 # Create a page based on Avery 5160:  
-#    portrait (210mm x 297mm) sheets with 3 columns and 10 rows of labels. 
+#    portrait (8.5" X 11") sheets with 3 columns and 10 rows of labels. 
 #
 #----------------------------------------------------------------------
 def createAvery5160Spec():
@@ -93,6 +97,7 @@ def createAvery5160Spec():
 
 
     #specs = labels.Specification(210, 297, 3, 8, 65, 25, corner_radius=2)
+    # units = mm !
     specs = labels.Specification(
 	sheet_width, sheet_height,
 	columns, rows,
@@ -112,80 +117,179 @@ def createAvery5160Spec():
 	corner_radius  = corner_radius  ,
 	padding_radius = padding_radius ,
 	
-	background_filename=background_filename,
+	#background_filename=background_filename,
 
     )
     return specs
 
+#----------------------------------------------------------------------
+# adjust fontsize down until it fits a width/height limit
+# should really range for value instead of timidly crepping towards target
+#----------------------------------------------------------------------
+
+def fit_text_in_area(the_text,font_name,text_width_limit,text_height_limit):
+    font_size = text_height_limit
+    text_width = stringWidth(the_text, font_name, font_size)
+    while ((text_width > text_width_limit) or (font_size > text_height_limit)):
+        font_size *= 0.95
+        text_width = stringWidth(the_text, font_name, font_size)
+
+    s = shapes.String(0, 0, the_text, fontName=font_name, fontSize=font_size, textAnchor="start")
+    #pprint("text_height_limit = " + str(text_height_limit))
+    #pprint(s.dumpProperties())
+    #pprint(s)
+    return s
 
 #----------------------------------------------------------------------
-# Create a function to draw each label. This will be given the ReportLab drawing
-# object to draw on, the dimensions in points, and the data to put on the nametag
+# generate strings of family name from line data
 #----------------------------------------------------------------------
-def write_data(label, width, height, data):
+def get_labels_from_data (data):
 
     #print("write_data")
-    #pprint.pprint(data)
+    #pprint(data)
 
-    # section 1 : barcode
-    the_num = data['parent_id_for_sticker']
-    d = createBarcodeDrawing('Code128', value=the_num,  barHeight=10*mm, humanReadable=True)
-    #pprint.pprint(d.dumpProperties())
-    barcode_width = d.width - 10
-    label.add(d)
+    # section1: the actual barcode
+    num1 = data['parent_id_for_sticker'][0]
+    if (num1 > 10000): num1 -= 10000  # DEBUG
+    # BUG: the id sometimes has a 0.5 at the end because of the way records were split
+    #num1 = int(num1) + 1
 
-    # section 2 : room number
-    the_text = "gr" + str(data['youngest_child_grade']) + " rm" + str(data['youngest_child_room'])
-    label.add(shapes.String(15, height-15, the_text, fontName="Judson Bold", fontSize=8, textAnchor="start"))
+    # section2: family name
+    str1 = data['child_last_name'][0]
 
-    # section3: parent names
-    name1 = data['firstname_parentguardian1']
-    name2 = data['firstname_parentguardian2']
+    # section3: parent names with & as joiner
+    str2 = conjunction(data['parent_first_name'])
 
-    # test for blank conditions
-    test = (u'(blank)' in name1 or name1.isspace() , u'(blank)' in name2 or name2.isspace())
-    if   (cmp(test,(True,  True )) == 0): the_text = " "
-    elif (cmp(test,(False, True )) == 0): the_text = name1 + " &"
-    elif (cmp(test,(True , False)) == 0): the_text = name2 + " &"
-    elif (cmp(test,(False, False)) == 0): the_text = name1 + ", " + name2 + " &"
-
-    # Measure the width of the name and shrink the font size until it fits.
-    the_text = the_text.title()
-    font_size = 30
-    text_width = width - barcode_width
-    name_width = stringWidth(the_text, "Judson Bold", font_size)
-    while name_width > text_width:
-        font_size *= 0.95
-        name_width = stringWidth(the_text, "Judson Bold", font_size)
-
-
-    label.add(shapes.String(width-2, height-20, the_text, fontName="Judson Bold", fontSize=font_size, textAnchor="end"))
-
-    # section4: child's full name
-    the_text = data['youngest_child_first_name'] + " " + data['familyname']
-    the_text = the_text.title()
-    # Measure the width of the name and shrink the font size until it fits.
-    font_size = 100
-    text_width = width - barcode_width
-    name_width = stringWidth(the_text, "KatamotzIkasi", font_size)
-    while name_width > text_width:
-        font_size *= 0.95
-        name_width = stringWidth(the_text, "KatamotzIkasi", font_size)
-
-    # Write out the name in the centre of the label with a random colour.
-    s = shapes.String( barcode_width, 20, the_text)
-    s.fontName = "KatamotzIkasi"
-    s.fontSize = font_size
-    #s.fillColor = random.choice((colors.blue, colors.red, colors.green))
-    label.add(s)
+    # section4: child's names
+    str3 = conjunction(data['child_first_name'])
 
     # section 4 : label number
-    the_text = str(data['index']+1) + "/" + str(data['number_of_stickers'])
-    s = shapes.String(width-2, 5, the_text, fontName="Judson Bold", fontSize=6, textAnchor="end")
+    #str4 = str(data['index']+1) + "/" + str(data['number_of_stickers'] )
+    str4 = " "
+
+
+    return (num1, str1, str2, str3, str4)
+
+#----------------------------------------------------------------------
+# http://stackoverflow.com/questions/21217846/python-join-list-of-strings-with-comma-but-with-some-conditions-code-refractor
+#----------------------------------------------------------------------
+def conjunction(l, threshold = 5):
+    length = len(l)
+    l = map(str,l)
+    if   length <= 2:         return " & ".join(l)
+    elif length < threshold:  return ", ".join(l[:-1]) + " & " + l[-1]
+    elif length == threshold: return ", ".join(l[:-1]) + " & 1 other"
+    else: return ", ".join(l[:t-1]) + " & +{} others".format(length - (t - 1))
+
+#----------------------------------------------------------------------
+# Create a callback function to draw each label. 
+# This will be given the ReportLab drawing object to draw on, 
+# the dimensions in points, and the data to put on the nametag
+#----------------------------------------------------------------------
+
+def write_data(label, width, height, data):
+
+    (num1, str1, str2, str3, str4) = get_labels_from_data(data)
+
+    pad = 10;	
+
+    # section 1 : barcode
+    D = Drawing(width,height)
+    d = createBarcodeDrawing('Code128', value=num1,  barHeight=0.4*inch, humanReadable=True, quiet=False)
+    #d = createBarcodeDrawing('I2of5', value=the_num,  barHeight=10*mm, humanReadable=True)
+
+    barcode_width  = d.width
+    barcode_height = d.height
+
+    #d.rotate(-90)
+    #d.translate( - barcode_height ,pad) # translate 
+
+    d.translate( pad/2.0 ,0) # translate 
+
+    #pprint(d.dumpProperties())
+
+    #D.add(d)
+    #label.add(D)
+    label.add(d)
+
+
+    rect = shapes.Rect(0, pad, barcode_width + pad, barcode_height+pad)
+    rect.fillColor = None
+    rect.strokeColor = random.choice((colors.blue, colors.red, colors.green))
+    #rect.strokeWidth = d.borderStrokeWidth
+    #label.add(rect)
+
+
+    # section 2 : room number
+    #the_text = "gr" + str(data['youngest_child_grade']) + " rm" + str(data['youngest_child_room'])
+    #label.add(shapes.String(15, height-15, the_text, fontName="Judson Bold", fontSize=8, textAnchor="start"))
+
+    # section2: family name
+    # Measure the width of the name and shrink the font size until it fits.
+    font_name = "PermanentMarker"
+
+    # Measure the width of the name and shrink the font size until it fits.
+    # try out 2 options and select the one that gives a taller font
+    text_width_limit  = width  - barcode_width - pad
+    text_height_limit = height / 2.0;
+    s1 = fit_text_in_area(str1,font_name,text_width_limit,text_height_limit)
+
+    text_width_limit  = width - pad
+    text_height_limit = height - barcode_height
+    s2 = fit_text_in_area(str1,font_name,text_width_limit,text_height_limit)
+
+    if (s1.fontSize >= s2.fontSize): s = s1
+    else:                            s = s2
+
+    s.x = width - pad/2.0
+    s.y = height - s.fontSize + pad / 2.0
+    s.textAnchor = "end"
+    label.add(s)
+
+    family_name_height = s.fontSize
+	
+
+    # section3: parent names
+    text_width_limit  = width  - barcode_width - 2 * pad
+    text_height_limit = (height - family_name_height)/2.0
+    font_name = "Judson Bold"
+
+    s = fit_text_in_area(str2,font_name,text_width_limit,text_height_limit)
+    s.x = width - pad/2.0
+    s.y = height - family_name_height - s.fontSize + pad/2.0
+    s.textAnchor = "end"
+    label.add(s)
+
+    parent_name_height = s.fontSize
+
+    # section4: child's names
+    text_width_limit  = width  - barcode_width - 2 * pad
+    text_height_limit = height - family_name_height - parent_name_height 
+    font_name = "Judson Bold"
+
+    s = fit_text_in_area(str3,font_name,text_width_limit,text_height_limit)
+    s.x = width - pad/2.0
+    s.y = height - family_name_height - parent_name_height - s.fontSize + pad/2.0
+    s.textAnchor = "end"
+    label.add(s)
+
+    child_name_height = s.fontSize
+
+
+    # section 4 : label number
+    font_name = "Judson Bold"
+    font_size = 5
+    s = shapes.String(width, height - font_size, str4, fontName=font_name, fontSize=font_size, textAnchor="end")
+    #s.x = width
+    #s.y = 0
+    #s.textAnchor = "start"
     label.add(s)
 
     # section 5 : logo
-    #s = shapes.Image(barcode_width + 0.4 * (width - barcode_width), 0, 15, 15, "logo.jpg")
+    s = shapes.Image(0, 0, 25, 25, "logo.jpg")
+    s.x = (barcode_width - 15)/2.0 
+    s.y = height - pad - 15
+
     #label.add(s)
 
 #----------------------------------------------------------------------
@@ -219,7 +323,8 @@ def is_number(s):
 #
 #----------------------------------------------------------------------
 
-def process_one_record(k,v):
+def process_one_record(tag,k,v):
+
     # only process if we read 16 columns of data
     if (len(v) == 16):
 	LABELS = """
@@ -241,44 +346,245 @@ def process_one_record(k,v):
 	youngest_child_room
 	"""
 
+    if (len(v) == 29):
+	LABELS = """
+	empty
+	empty
+	parent_id_for_sticker
+	number_of_stickers
+	studentrecords_parentid
+	split
+	familyname
+	firstname_parentguardian1
+	lastname_parentguardian1
+	phone1cell
+	email
+	streetaddress
+	city
+	zip
+	firstname_parentguardian2
+	lastname_parentguardian2
+	phone2Cell
+	email2
+	streetAddress2
+	city2
+	zip2
+	youngest_child_first_name
+	"""
+
+    if (len(v) == 12):
+	LABELS = """
+	grade_old
+	grade_new
+	child_last_name
+	child_first_name
+	gender
+	parent_last_name
+	parent_first_name
+	parent_id_for_sticker
+	phone
+	email
+	teacher
+	room
+	"""
+
+
 	labels=LABELS.split()
 	line_item = dict(zip(labels,v))
-	#pprint.pprint(line_item)
+        #print("one item")
+	#pprint(line_item)
 
-	# only print record with > 0 number of stickers
-	# otherwise, print a minimum of 3 labels
-	# align number of stickers to be easily cut, ie, multiples of 3
+	id = line_item['parent_id_for_sticker']
+	# only store lines with valid id
+	if (not is_number(id)):
+	    return
+	if (id == 0):
+	    return
 
-        # see http://stackoverflow.com/questions/9810391/round-to-the-nearest-500-python
-	c = 3 # number of columns 
-	x = line_item.get('number_of_stickers') 
-	if (is_number(x) and (x != 0)):
-	    if (x < c ): x = c
-	    else: 	 x = x + (c - x) % c
+        items = {}
+	if (tag.get(id) is None):
+	    for key in labels: 
+		items[key] = [line_item[key]]
+  	else:
+	    old_items = tag[id]
+	    for key in labels: 
+		items[key] = old_items[key] + [line_item[key]]
+		
+	tag[id] = items
 
-	    pprint.pprint(line_item)
-	    for i in range(x):
-		line_item['index'] = i
-	        sheet.add_label(line_item)
+    return
 
 #----------------------------------------------------------------------
 #
 # slurp in the excel file and return a dict for easy processing
 #
 #----------------------------------------------------------------------
-def load_records_from_excel(data_file):
+
+def print_one_tag(items):
+
+    sheet.add_label(items)
+
+
+#	# only print record with > 0 number of stickers
+#	# otherwise, print a minimum of 3 labels
+#	# align number of stickers to be easily cut, ie, multiples of 3
+#
+#
+#        # see http://stackoverflow.com/questions/9810391/round-to-the-nearest-500-python
+#	line_item['number_of_stickers']  = 1 # DEBUG OVERRIDE
+#	c = 3 # number of columns 
+#	x = line_item.get('number_of_stickers') 
+#	if (is_number(x) and (x != 0)):
+#	    if (x < c ): x = c
+#	    else: 	 x = x + (c - x) % c
+#	    line_item['number_of_stickers'] = x
+#
+#
+#----------------------------------------------------------------------
+#
+# slurp in the excel file and return a dict for easy processing
+#
+#----------------------------------------------------------------------
+def load_records_from_excel(data_file, sheet_name):
     # load excel file--hardcoded name of workbook
     wb = load_workbook(filename=data_file, read_only=True)
-    ws = wb['Sticker Data'] 
+    ws = wb[sheet_name] 
 
     # now store this in a dict with row number as the key
     records = {}
     for row in ws.rows:
-	index = tuple( cell.row for cell in row)[-1]
+	index = tuple( cell.row for cell in row)[3] # pick one col which definately has a value 
 	records[index] = tuple( cell.value for cell in row)
 
     return records 
 
+#----------------------------------------------------------------------
+#
+# process records using a helper for each one
+# collect multiple records that share parent id and produce 1-to-1
+# map with labels 
+#
+#----------------------------------------------------------------------
+def process_records (records):
+    tag = {}
+    record_limit = 1e6   # useful for testing and runaway bugs
+    count = 0
+
+    for k,v in records.items():
+	process_one_record(tag,k,v)
+	count += 1
+	if (count >= record_limit):
+	    break
+	
+    print "processed " ,  count, " records "
+
+    return tag
+
+#----------------------------------------------------------------------
+#
+# check tag id compaction
+#
+#----------------------------------------------------------------------
+def fix_tags (tag):
+    count = 0
+
+    # remove multiple values by ordered uniq list, see:
+    # http://stackoverflow.com/questions/480214/how-do-you-remove-duplicates-from-a-list-in-python-whilst-preserving-order
+    for id,items in tag.items():
+	for k,v in items.items():
+	    items[k] = list(OrderedDict.fromkeys(v))
+	tag[id] = items
+
+    # can we limit id to some threshold?
+    limit = 10000
+    for id,items in tag.items():
+	if (id > limit):
+	   id_short = id - limit
+	   if (tag.get(id_short) is not None):
+		print "fix_tags: CLASH for ", limit, " for id= ", id
+
+    # validation tests
+    for id,items in tag.items():
+	if (len(items['child_last_name']) > 1):
+	    print "fix_tags: entry " , id, " has children with different last name" , items['child_last_name']
+ 
+    for id,items in tag.items():
+	if (len(items['parent_first_name']) == 0):
+	    print "fix_tags: entry " , id, " has no parents"
+
+
+    # children sometimes have names like "beiber gomez" which combine
+    # parent names.  we try to catch cases where the child last name is 
+    # completely different from single parent
+
+    for id,items in tag.items():
+	if (len(items['parent_first_name']) == 1):
+	    parent_first_name = items['parent_first_name'][0]
+	    parent_last_name = items['parent_last_name'][0]
+	    child_last_name  = items['child_last_name'][0]
+	    if ((parent_last_name not in child_last_name) and 
+		 child_last_name not in parent_last_name):
+		print "fix_tags: entry " , id, " has 1 parent with different last name from child: parent_last_name = " , parent_last_name, " child_last_name = ", child_last_name
+		# append single parent last name into first
+	        parent_first_last_name = parent_first_name + " " + parent_last_name
+		items['parent_first_name'] = [parent_first_last_name]
+		print "fix_tags: new parent name is ", parent_first_last_name
+		tag[id] = items
+
+    return tag
+
+#----------------------------------------------------------------------
+#
+# print out process records (ie tags) softed by first child's last name
+# sorting is complex because some last names have multiple words
+#
+#----------------------------------------------------------------------
+def print_tags (tag):
+    count = 0
+    
+    sorted_items_list = sorted(tag.values(), key=lambda
+		items: items['child_last_name'][0].split()[-1])
+
+    # duplicate entries for tags requiring extra column of stickers
+    duplicate_items_list = []
+    for items in sorted_items_list:
+	duplicate_items_list.append(items)
+	duplicate_items_list.append(items)
+	# TODO: add extra strips here
+
+    # output stickers 3 at a time across for 10 in a column
+    number_of_stickers_per_column = 10
+    number_of_stickers_per_row    =  3
+    for i in range(0,len(duplicate_items_list),number_of_stickers_per_row):
+	for j in range(number_of_stickers_per_column):
+	    for k in range(number_of_stickers_per_row):
+		index = i+k
+		if (index >= len(duplicate_items_list)):
+		    index  = len(duplicate_items_list) - 1
+	        print_one_tag(duplicate_items_list[index])
+	        count += 1
+
+    print "printed " ,  count, " stickers"
+    return count
+
+
+#----------------------------------------------------------------------
+#
+# single tags for debug
+#
+#----------------------------------------------------------------------
+def debug_print_tags (tag):
+    count = 0
+    
+    sorted_items_list = sorted(tag.values(), key=lambda
+	items: items['child_last_name'][0].split()[-1])
+
+    for items in sorted_items_list:
+	print_one_tag(items)
+	count += 1
+
+    print "printed " ,  count, " stickers"
+    return count
 
 #----------------------------------------------------------------------
 #
@@ -286,24 +592,34 @@ def load_records_from_excel(data_file):
 #
 #----------------------------------------------------------------------
 
+DEBUG_PRINT = 1
 
 # register some fonts, assumed to be in the same dir as this script
 base_path = os.path.dirname(__file__)
-registerFont(TTFont('Judson Bold',   os.path.join(base_path, 'Judson-Bold.ttf')))
-registerFont(TTFont('KatamotzIkasi', os.path.join(base_path, 'KatamotzIkasi.ttf')))
+registerFont(TTFont('Judson Bold',      os.path.join(base_path, 'Judson-Bold.ttf')))
+registerFont(TTFont('KatamotzIkasi',    os.path.join(base_path, 'KatamotzIkasi.ttf')))
+registerFont(TTFont('Magnus Cederholm', os.path.join(base_path, 'FFF_Tusj.ttf')))
+registerFont(TTFont('PermanentMarker',  os.path.join(base_path, 'PermanentMarker.ttf')))
 
-# create the sheet
+
+# load excel and loop through rows
+data_file = '../excel/data.xlsx'
+sheet_name = 'rawdata'
+
+
+# parse data and create
+records = load_records_from_excel(data_file, sheet_name)
+tag = process_records(records)
+tag = fix_tags(tag)
+
+# create the sheet with callback function write_data to process each record
 specs = createAvery5160Spec()
 sheet = labels.Sheet(specs, write_data, border=True)
 
-# load excel and loop through rows
-data_file = '../sample_excel/Sample Sticker Data File.xlsx'
-records = load_records_from_excel(data_file)
+if (DEBUG_PRINT): debug_print_tags(tag)
+else:             print_tags(tag)
 
-for k,v in records.items():
-    process_one_record(k,v)
-
-# save results
+# save results in pdf
 sheet.save('nametags.pdf')
 print("{0:d} label(s) output on {1:d} page(s).".format(sheet.label_count, sheet.page_count))
 
