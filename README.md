@@ -10,11 +10,15 @@
  (scale fonts to fit, skip missing parent's names, repeat labels etc)
  so here we are.
 
- prereq:
+### prereq:
 
-  pip install reportlab
-  pip install openpyxl
-  pip install pylabels
+>
+>  pip install reportlab
+>
+>  pip install openpyxl
+>
+>  pip install pylabels
+>
 
 
  code is written to be thrown away after it's first successful run :-)
